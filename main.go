@@ -1,28 +1,30 @@
 package main
 
 import (
-	"./database"
 	"encoding/json"
 	"fmt"
-	"github.com/dgrijalva/jwt-go"
-	_ "github.com/mattn/go-sqlite3"
-	"github.com/rs/cors"
-	"golang.org/x/crypto/bcrypt"
 	"log"
 	"net/http"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/dgrijalva/jwt-go"
+	_ "github.com/mattn/go-sqlite3"
+	"github.com/rs/cors"
+	"golang.org/x/crypto/bcrypt"
+
+	"backend.thesimplelab.co/database"
 )
 
 type User struct {
-	ID int `json:"id"`
+	ID       int    `json:"id"`
 	Username string `json:"username"`
 	Password string `json:"password"`
 }
 
 type Response struct {
-	Status string `json:"status"`
+	Status  string `json:"status"`
 	Message string `json:"message"`
 }
 
@@ -34,7 +36,7 @@ type Claims struct {
 func main() {
 	db, err := database.NewDB()
 	if err != nil {
-		return 
+		return
 	}
 
 	mux := http.NewServeMux()
@@ -60,7 +62,7 @@ func main() {
 			}
 
 			//check if body object is empty, if yes then return
-			if user.Username == "" || user.Password == ""{
+			if user.Username == "" || user.Password == "" {
 				response.Status = "FAIL"
 				response.Message = "Username or password is empty"
 				jsonResponse, err := json.Marshal(response)
@@ -76,7 +78,7 @@ func main() {
 
 			//Salt and hash the password using the bcrypt algorithm
 			//The second argument is the cost of hashing
-			hashedPassword, err := bcrypt.GenerateFromPassword([]byte(user.Password),8)
+			hashedPassword, err := bcrypt.GenerateFromPassword([]byte(user.Password), 8)
 			if err = db.InsertUsers(user.Username, string(hashedPassword)); err != nil {
 				response.Status = "FAIL"
 				response.Message = "Something went wrong"
@@ -109,7 +111,7 @@ func main() {
 				//split the token to remove the bearer string
 				splitToken := strings.Split(requestToken, "Bearer ")
 				requestToken = splitToken[1]
-			}else{
+			} else {
 				response.Status = "FAIL"
 				response.Message = "Cannot get request token"
 				jsonResponse, err := json.Marshal(response)
@@ -127,7 +129,7 @@ func main() {
 				requestToken,
 				&Claims{},
 				func(token *jwt.Token) (interface{}, error) {
-					return []byte(("my_secret_key")),nil
+					return []byte(("my_secret_key")), nil
 				},
 			)
 
@@ -142,7 +144,7 @@ func main() {
 				if err != nil {
 					return
 				}
-			}else{
+			} else {
 				users, err := db.GetUsers()
 				if err != nil {
 					response.Status = "FAIL"
@@ -169,7 +171,7 @@ func main() {
 					return
 				}
 			}
-		}else if r.Method == "PATCH"{
+		} else if r.Method == "PATCH" {
 			//create a user instance of user struct
 			user := &User{}
 			if err := json.NewDecoder(r.Body).Decode(user); err != nil {
@@ -186,8 +188,8 @@ func main() {
 			}
 
 			//hash password before update user's password
-			hashedPassword, err := bcrypt.GenerateFromPassword([]byte(user.Password),8)
-			if err = db.UpdateUser(user.ID,user.Username, string(hashedPassword)); err != nil {
+			hashedPassword, err := bcrypt.GenerateFromPassword([]byte(user.Password), 8)
+			if err = db.UpdateUser(user.ID, user.Username, string(hashedPassword)); err != nil {
 				response.Status = "FAIL"
 				response.Message = "Something went wrong"
 				jsonResponse, err := json.Marshal(response)
@@ -212,7 +214,7 @@ func main() {
 			}
 			return
 
-		}else if r.Method == "DELETE" {
+		} else if r.Method == "DELETE" {
 			//retrieve parameter from url
 			param, ok := r.URL.Query()["id"]
 			if !ok || len(param[0]) < 1 {
@@ -262,7 +264,7 @@ func main() {
 					return
 				}
 				return
-			}else {
+			} else {
 				response.Status = "SUCCESS"
 				response.Message = "Deleted Successfully"
 				jsonResponse, err := json.Marshal(response)
@@ -278,9 +280,9 @@ func main() {
 		}
 	})
 
-	mux.HandleFunc("/users/login", func(w http.ResponseWriter, r *http.Request){
+	mux.HandleFunc("/users/login", func(w http.ResponseWriter, r *http.Request) {
 		response := &Response{}
-		if r.Method == "POST"{
+		if r.Method == "POST" {
 			//create a user instance of user struct
 			loginUser := &User{}
 			//Parse and decode the request body into a new user instance
@@ -326,7 +328,7 @@ func main() {
 					if err != nil {
 						return
 					}
-				}else{
+				} else {
 					//set the claims
 					claim := &Claims{
 						Username: loginUser.Username,
@@ -366,4 +368,3 @@ func main() {
 	handler := cors.AllowAll().Handler(mux)
 	log.Fatal(http.ListenAndServe(":8080", handler))
 }
-
