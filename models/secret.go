@@ -34,16 +34,3 @@ func (s *SecretOperationsImpl) GetTokenKey() (string, error) {
 	}
 	return secret.Secret, nil
 }
-
-//func (s *SecretOperationsImpl) Insert(sct, typ string) error {
-//	secret := &Secret{
-//		Secret: sct,
-//		Type:   typ,
-//	}
-//
-//	err := s.DbConn.Select("secret", "type").Create(secret).Error
-//	if err != nil {
-//		return err
-//	}
-//	return nil
-//}
