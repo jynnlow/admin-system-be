@@ -1,42 +1,40 @@
 package models
 
-import "gorm.io/gorm"
+import (
+	"gorm.io/gorm"
+)
+
+type UserCRUDOperations interface {
+	Insert(*User) error
+	Delete(uint) error
+	Update(uint, string, string) error
+	GetByID(uint) (*User, error)
+	GetByUsername(string) (*User, error)
+	GetAll() ([]*User, error)
+}
 
 type User struct {
 	gorm.Model
 	Username string `json:"username" gorm:"unique"`
 	Password string `json:"password"`
-}
-
-type UserCRUDOperations interface {
-	InsertUsers(string, string) error
-	DeleteUsers(int) error
-	UpdateUsers(int, string, string) error
-	GetUserByID(int) (*User, error)
-	GetAllUsers() ([]*User, error)
-	GetPwdByUsername(string) (*string, error)
+	Role     string `json:"role"`
+	Approved bool   `json:"approved"`
 }
 
 type UserCRUDOperationsImpl struct {
 	DbConn *gorm.DB
 }
 
-func (u *UserCRUDOperationsImpl) InsertUsers(username, password string) error {
-	newUser := &User{
-		Username: username,
-		Password: password,
-	}
-
-	err := u.DbConn.Select("username", "password").Create(newUser).Error
+func (u *UserCRUDOperationsImpl) Insert(user *User) error {
+	err := u.DbConn.Select("username", "password", "role", "approved").Create(user).Error
 	if err != nil {
 		return err
 	}
 	return nil
 }
 
-func (u *UserCRUDOperationsImpl) DeleteUsers(id uint) error {
-	//find user with given id
-	foundUser, err := u.GetUserByID(id)
+func (u *UserCRUDOperationsImpl) Delete(id uint) error {
+	foundUser, err := u.GetByID(id)
 	if err != nil {
 		return err
 	}
@@ -49,13 +47,11 @@ func (u *UserCRUDOperationsImpl) DeleteUsers(id uint) error {
 	return nil
 }
 
-func (u *UserCRUDOperationsImpl) UpdateUsers(id uint, username string, password string) error {
-	//find user with given id
-	foundUser, err := u.GetUserByID(id)
+func (u *UserCRUDOperationsImpl) Update(id uint, username string, password string) error {
+	foundUser, err := u.GetByID(id)
 	if err != nil {
 		return err
 	}
-	//check if username and password is empty
 	if username != "" && foundUser.Username != username {
 		foundUser.Username = username
 	}
@@ -70,7 +66,7 @@ func (u *UserCRUDOperationsImpl) UpdateUsers(id uint, username string, password 
 	return nil
 }
 
-func (u *UserCRUDOperationsImpl) GetAllUsers() ([]*User, error) {
+func (u *UserCRUDOperationsImpl) GetAll() ([]*User, error) {
 	var users []*User
 	err := u.DbConn.Find(&users).Error
 	if err != nil {
@@ -79,7 +75,7 @@ func (u *UserCRUDOperationsImpl) GetAllUsers() ([]*User, error) {
 	return users, nil
 }
 
-func (u *UserCRUDOperationsImpl) GetUserByID(id uint) (*User, error) {
+func (u *UserCRUDOperationsImpl) GetByID(id uint) (*User, error) {
 	user := &User{}
 	err := u.DbConn.First(user, id).Error
 	if err != nil {
@@ -88,11 +84,11 @@ func (u *UserCRUDOperationsImpl) GetUserByID(id uint) (*User, error) {
 	return user, nil
 }
 
-func (u *UserCRUDOperationsImpl) GetPwdByUsername(username string) (*string, error) {
+func (u *UserCRUDOperationsImpl) GetByUsername(username string) (*User, error) {
 	user := &User{}
 	err := u.DbConn.Where("username = ?", username).First(user).Error
 	if err != nil {
 		return nil, err
 	}
-	return &user.Password, nil
+	return user, nil
 }

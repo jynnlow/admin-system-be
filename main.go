@@ -31,10 +31,23 @@ func main() {
 		DbConn: dbConn,
 	}
 
+	//
+	secretOperation := &models.SecretOperationsImpl{
+		DbConn: dbConn,
+	}
+
 	// Handlers registration
 	userHandlers := &handlers.UsersHandler{
 		ModelsFunc: userCrudOperation,
+		SecretFunc: secretOperation,
 	}
+
+	//sct, err := secretOperation.GetTokenKey()
+	//if err != nil {
+	//	return
+	//} else {
+	//	fmt.Println(*sct)
+	//}
 
 	// Router registration
 	router := mux.NewRouter()

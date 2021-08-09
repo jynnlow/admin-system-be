@@ -1,364 +1,440 @@
 package handlers
 
 import (
+	"admin-system-be/entity"
 	"encoding/json"
-	"fmt"
-	"log"
 	"net/http"
-	"os"
 	"strconv"
-	"strings"
-	"time"
 
-	"github.com/dgrijalva/jwt-go"
 	"github.com/gorilla/mux"
 	"golang.org/x/crypto/bcrypt"
 
 	"admin-system-be/constants"
+	"admin-system-be/dto"
+	"admin-system-be/helpers"
 	"admin-system-be/models"
 )
 
 type UsersHandler struct {
 	ModelsFunc *models.UserCRUDOperationsImpl
+	SecretFunc *models.SecretOperationsImpl
 }
 
-type Claims struct {
-	Username string `json:"username"`
-	jwt.StandardClaims
+type Admin struct {
+	LoginKey string `json:"login_key"`
 }
 
 func AttachUsersHandler(subRouter *mux.Router, handlers *UsersHandler) {
-	subRouter.HandleFunc("/login", handlers.Login).Methods("POST")
-	subRouter.HandleFunc("", handlers.Signup).Methods("POST")
-	subRouter.HandleFunc("", handlers.GetAll).Methods("GET")
-	subRouter.HandleFunc("", handlers.Update).Methods("PATCH")
-	subRouter.HandleFunc("", handlers.Delete).Methods("DELETE")
+	subRouter.HandleFunc("/login", handlers.Login).Methods(constants.POST)
+	subRouter.HandleFunc("", handlers.Signup).Methods(constants.POST)
+	subRouter.HandleFunc("", handlers.GetAll).Methods(constants.GET)
+	subRouter.HandleFunc("", handlers.Update).Methods(constants.PATCH)
+	subRouter.HandleFunc("", handlers.Delete).Methods(constants.DELETE)
 }
 
-//Login ...
+// Login ...
 func (u *UsersHandler) Login(w http.ResponseWriter, r *http.Request) {
-	response := &constants.Response{}
-	//create a user instance of user struct
-	loginUser := &models.User{}
-	//Parse and decode the request body into a new user instance
-
-	if err := json.NewDecoder(r.Body).Decode(loginUser); err != nil {
-		response.Status = constants.FAIL
-		response.Message = "Something wrong"
-		jsonResponse, err := json.Marshal(response)
-		if err != nil {
-			log.Println(err)
-		}
-		_, err = w.Write(jsonResponse)
-		if err != nil {
-			log.Println(err)
-		}
-	}
-
-	//Using input username to get the hashed password in the database
-	hashedPassword, err := u.ModelsFunc.GetPwdByUsername(loginUser.Username)
+	loginUser := &dto.UserRequest{}
+	// Parse and decode the request body into a new user instance
+	err := json.NewDecoder(r.Body).Decode(loginUser)
 	if err != nil {
-		response.Status = constants.FAIL
-		response.Message = "Users not found in the system"
-		jsonResponse, err := json.Marshal(response)
-		if err != nil {
-			return
-		}
-		_, err = w.Write(jsonResponse)
-		if err != nil {
-			return
-		}
+		err = helpers.JsonResponse(
+			constants.FAIL,
+			err.Error(),
+			w,
+		)
+		return
 	}
 
-	if hashedPassword != nil {
-		hashedPasswordByte := []byte(*hashedPassword)
-		err = bcrypt.CompareHashAndPassword(hashedPasswordByte, []byte(loginUser.Password))
-		if err != nil {
-			response.Status = constants.FAIL
-			response.Message = "Incorrect Password"
-			jsonResponse, err := json.Marshal(response)
-			if err != nil {
-				return
-			}
-			_, err = w.Write(jsonResponse)
-			if err != nil {
-				return
-			}
-		} else {
-			//set the claims
-			claim := &Claims{
-				Username: loginUser.Username,
-				StandardClaims: jwt.StandardClaims{
-					ExpiresAt: time.Now().Add(100 * time.Minute).Unix(),
-				},
-			}
-			//create a token
-			token := jwt.NewWithClaims(jwt.SigningMethodHS256, claim)
-			tokenKey := fmt.Sprintf("%s", os.Getenv("TOKEN_KEY"))
-			//create the JWT token encoded string
-			tokenEncodedString, err := token.SignedString([]byte(tokenKey))
-			if err != nil {
-				w.WriteHeader(http.StatusInternalServerError)
-				return
-			}
-			//return login status
-			response.Status = constants.SUCCESS
-			response.Message = tokenEncodedString
-			jsonResponse, err := json.Marshal(response)
-			if err != nil {
-				return
-			}
-			_, err = w.Write(jsonResponse)
-			if err != nil {
-				return
-			}
-		}
+	// check if the username or password is empty
+	err = loginUser.Validate()
+	if err != nil {
+		err = helpers.JsonResponse(
+			constants.FAIL,
+			"username or password cannot be empty",
+			w,
+		)
+		return
 	}
 
+	//get user from db
+	user, err := u.ModelsFunc.GetByUsername(loginUser.Username)
+	if err != nil {
+		err = helpers.JsonResponse(
+			constants.FAIL,
+			"user not found in the system",
+			w,
+		)
+		return
+	}
+
+	//check if the user is approved to login
+	if user.Approved != true {
+		err = helpers.JsonResponse(
+			constants.FAIL,
+			"please wait for admin to approve your registration",
+			w,
+		)
+		return
+	}
+
+	// check if the input is matched with the password in db
+	err = bcrypt.CompareHashAndPassword([]byte(user.Password), []byte(loginUser.Password))
+	if err != nil {
+		err = helpers.JsonResponse(
+			constants.FAIL,
+			"incorrect password",
+			w,
+		)
+		return
+	}
+
+	//retrieve token key from db
+	tokenKey, err := u.SecretFunc.GetTokenKey()
+	if err != nil {
+		err = helpers.JsonResponse(
+			constants.FAIL,
+			"token key does not exist",
+			w,
+		)
+		return
+	}
+
+	//create token
+	token := helpers.NewClaim(
+		user.ID,
+		user.Username,
+		user.Role,
+	)
+
+	tokenEncodedString, err := token.CreateToken(tokenKey)
+	if err != nil {
+		err = helpers.JsonResponse(
+			constants.FAIL,
+			"failed to create token",
+			w,
+		)
+		return
+	}
+
+	//respond when successful
+	err = helpers.JsonResponse(
+		constants.SUCCESS,
+		tokenEncodedString,
+		w,
+	)
 }
 
 // Signup ...
 func (u *UsersHandler) Signup(w http.ResponseWriter, r *http.Request) {
-	response := &constants.Response{}
-	//create a user instance of user struct
-	user := &models.User{}
-	//Parse and decode the request body into a new user instance
-	if err := json.NewDecoder(r.Body).Decode(user); err != nil {
-		response.Status = constants.FAIL
-		response.Message = "Something went wrong"
-		jsonResponse, err := json.Marshal(response)
-		if err != nil {
-			return
-		}
-		_, err = w.Write(jsonResponse)
-		if err != nil {
-			return
-		}
-	}
-
-	//check if body object is empty, if yes then return
-	if user.Username == "" || user.Password == "" {
-		response.Status = constants.FAIL
-		response.Message = "Username or password is empty"
-		jsonResponse, err := json.Marshal(response)
-		if err != nil {
-			return
-		}
-		_, err = w.Write(jsonResponse)
-		if err != nil {
-			return
-		}
+	registrationReq := &dto.UserRequest{}
+	err := json.NewDecoder(r.Body).Decode(registrationReq)
+	if err != nil {
+		err = helpers.JsonResponse(
+			constants.FAIL,
+			err.Error(),
+			w,
+		)
 		return
 	}
 
-	//Salt and hash the password using the bcrypt algorithm
-	//The second argument is the cost of hashing
-	hashedPassword, err := bcrypt.GenerateFromPassword([]byte(user.Password), 8)
-	if err = u.ModelsFunc.InsertUsers(user.Username, string(hashedPassword)); err != nil {
-		response.Status = constants.FAIL
-		response.Message = "Username already exits"
-		jsonResponse, err := json.Marshal(response)
-		if err != nil {
-			return
-		}
-		_, err = w.Write(jsonResponse)
-		if err != nil {
-			return
-		}
-	} else {
-		response.Status = constants.SUCCESS
-		response.Message = "Insert successfully"
-		jsonResponse, err := json.Marshal(response)
-		if err != nil {
-			return
-		}
-		_, err = w.Write(jsonResponse)
-		if err != nil {
-			return
-		}
+	err = registrationReq.Validate()
+	if err != nil {
+		err = helpers.JsonResponse(
+			constants.FAIL,
+			"username or password cannot be empty",
+			w,
+		)
+		return
 	}
 
+	//retrieve admin login key from db
+	adminLoginKey, err := u.SecretFunc.GetAdminLoginKey()
+	if err != nil {
+		err = helpers.JsonResponse(
+			constants.FAIL,
+			"admin login key not exists",
+			w,
+		)
+		return
+	}
+
+	//determine the role of user
+	user, err := entity.NewUserEntity(
+		registrationReq.Username,
+		registrationReq.Password,
+		registrationReq.SecretKey,
+		adminLoginKey,
+	)
+	if err != nil {
+		err = helpers.JsonResponse(
+			constants.FAIL,
+			"wrong admin secret key",
+			w,
+		)
+		return
+	}
+
+	hashedPassword, err := bcrypt.GenerateFromPassword([]byte(user.Password), 8)
+	if err != nil {
+		err = helpers.JsonResponse(
+			constants.FAIL,
+			err.Error(),
+			w,
+		)
+		return
+	}
+
+	userModel := &models.User{
+		Username: user.Username,
+		Password: string(hashedPassword),
+		Role:     user.Role,
+		Approved: user.Approved,
+	}
+
+	err = u.ModelsFunc.Insert(userModel)
+	if err != nil {
+		err = helpers.JsonResponse(
+			constants.FAIL,
+			err.Error(),
+			w,
+		)
+		return
+	}
+
+	err = helpers.JsonResponse(
+		constants.SUCCESS,
+		"Insert successfully",
+		w,
+	)
 }
 
 // GetAll ...
 func (u *UsersHandler) GetAll(w http.ResponseWriter, r *http.Request) {
-	response := constants.Response{}
-	//get the request token from the header authorization
-	requestToken := r.Header.Get("Authorization")
-	//check for empty request token
-	if requestToken != "" {
-		//split the token to remove the bearer string
-		splitToken := strings.Split(requestToken, "Bearer ")
-		requestToken = splitToken[1]
-	} else {
-		response.Status = constants.FAIL
-		response.Message = "Cannot get request token"
-		jsonResponse, err := json.Marshal(response)
-		if err != nil {
-			return
-		}
-		_, err = w.Write(jsonResponse)
-		if err != nil {
-			return
-		}
+	claims := &helpers.Claims{}
+	requestToken, err := claims.GetToken(r)
+	if err != nil {
+		err = helpers.JsonResponse(
+			constants.FAIL,
+			err.Error(),
+			w,
+		)
+		return
 	}
 
-	//parse the token with the claims
-	_, err := jwt.ParseWithClaims(
-		requestToken,
-		&Claims{},
-		func(token *jwt.Token) (interface{}, error) {
-			return []byte(fmt.Sprintf("%s", os.Getenv("TOKEN_KEY"))), nil
-		},
-	)
-
+	// get token key from db
+	tokenKey, err := u.SecretFunc.GetTokenKey()
 	if err != nil {
-		response.Status = constants.FAIL
-		response.Message = err.Error() + ". Please log in again to access admin dashboard."
-		jsonResponse, err := json.Marshal(response)
-		if err != nil {
-			return
-		}
-		_, err = w.Write(jsonResponse)
-		if err != nil {
-			return
-		}
-	} else {
-		users, err := u.ModelsFunc.GetAllUsers()
-		if err != nil {
-			response.Status = constants.FAIL
-			response.Message = "No user"
-			jsonResponse, err := json.Marshal(response)
-			if err != nil {
-				return
-			}
-			_, err = w.Write(jsonResponse)
-			if err != nil {
-				return
-			}
-		}
-		jsonUsers, err := json.Marshal(users)
-		if err != nil {
-			errString := fmt.Sprintf("%e", err)
-			_, err = w.Write([]byte(errString))
-			if err != nil {
-				return
-			}
-		}
-		_, err = w.Write(jsonUsers)
-		if err != nil {
-			return
-		}
+		err = helpers.JsonResponse(
+			constants.FAIL,
+			"token key does not exists",
+			w,
+		)
+		return
+	}
+
+	//verify token
+	verifiedToken, err := claims.VerifyToken(requestToken, tokenKey)
+	if err != nil {
+		err = helpers.JsonResponse(
+			constants.FAIL,
+			err.Error(),
+			w,
+		)
+		return
+	}
+
+	if verifiedToken.Role != "admin" {
+		err = helpers.JsonResponse(
+			constants.FAIL,
+			"please look for an admin to help out",
+			w,
+		)
+		return
+	}
+
+	users, err := u.ModelsFunc.GetAll()
+	if err != nil {
+		err = helpers.JsonResponse(
+			constants.FAIL,
+			err.Error(),
+			w,
+		)
+		return
+	}
+
+	err = helpers.JsonUserList(users, w)
+	if err != nil {
+		err = helpers.JsonResponse(
+			constants.FAIL,
+			err.Error(),
+			w,
+		)
+		return
 	}
 }
 
 // Update ...
 func (u *UsersHandler) Update(w http.ResponseWriter, r *http.Request) {
-	response := constants.Response{}
-	//create a user instance of user struct
+	claims := &helpers.Claims{}
 	user := &models.User{}
-	if err := json.NewDecoder(r.Body).Decode(user); err != nil {
-		response.Status = constants.FAIL
-		response.Message = "Something went wrong"
-		jsonResponse, err := json.Marshal(response)
-		if err != nil {
-			return
-		}
-		_, err = w.Write(jsonResponse)
-		if err != nil {
-			return
-		}
-	}
-
-	//hash password before update user's password
-	hashedPassword, err := bcrypt.GenerateFromPassword([]byte(user.Password), 8)
-	if err = u.ModelsFunc.UpdateUsers(user.ID, user.Username, string(hashedPassword)); err != nil {
-		response.Status = constants.FAIL
-		response.Message = "Something went wrong"
-		jsonResponse, err := json.Marshal(response)
-		if err != nil {
-			return
-		}
-		_, err = w.Write(jsonResponse)
-		if err != nil {
-			return
-		}
-	}
-
-	response.Status = constants.SUCCESS
-	response.Message = "Updated Successfully"
-	jsonResponse, err := json.Marshal(response)
+	err := json.NewDecoder(r.Body).Decode(user)
 	if err != nil {
+		err = helpers.JsonResponse(
+			constants.FAIL,
+			err.Error(),
+			w,
+		)
 		return
 	}
-	_, err = w.Write(jsonResponse)
+
+	var hashedPassword []byte
+	if user.Password != "" {
+		hashedPassword, err = bcrypt.GenerateFromPassword([]byte(user.Password), 8)
+		if err != nil {
+			err = helpers.JsonResponse(
+				constants.FAIL,
+				err.Error(),
+				w,
+			)
+			return
+		}
+		user.Password = string(hashedPassword)
+	}
+
+	requestToken, err := claims.GetToken(r)
 	if err != nil {
+		err = helpers.JsonResponse(
+			constants.FAIL,
+			err.Error(),
+			w,
+		)
 		return
 	}
-	return
+
+	// get token key from db
+	tokenKey, err := u.SecretFunc.GetTokenKey()
+	if err != nil {
+		err = helpers.JsonResponse(
+			constants.FAIL,
+			"token key does not exists",
+			w,
+		)
+		return
+	}
+
+	//verify token
+	verifiedToken, err := claims.VerifyToken(requestToken, tokenKey)
+	if err != nil {
+		err = helpers.JsonResponse(
+			constants.FAIL,
+			err.Error(),
+			w,
+		)
+		return
+	}
+
+	//if it is user, only retrieve its own data
+	if verifiedToken.Role == "user" {
+		user.ID = verifiedToken.Id
+	}
+
+	err = u.ModelsFunc.Update(user.ID, user.Username, user.Password)
+	if err != nil {
+		err = helpers.JsonResponse(
+			constants.FAIL,
+			err.Error(),
+			w,
+		)
+		return
+	}
+
+	err = helpers.JsonResponse(
+		constants.SUCCESS,
+		"Update successfully",
+		w,
+	)
 }
 
 // Delete ...
 func (u *UsersHandler) Delete(w http.ResponseWriter, r *http.Request) {
-	response := constants.Response{}
+	claims := &helpers.Claims{}
+	requestToken, err := claims.GetToken(r)
+	if err != nil {
+		err = helpers.JsonResponse(
+			constants.FAIL,
+			err.Error(),
+			w,
+		)
+		return
+	}
+
+	// get token key from db
+	tokenKey, err := u.SecretFunc.GetTokenKey()
+	if err != nil {
+		err = helpers.JsonResponse(
+			constants.FAIL,
+			"token key does not exists",
+			w,
+		)
+		return
+	}
+
+	//verify token
+	verifiedToken, err := claims.VerifyToken(requestToken, tokenKey)
+	if err != nil {
+		err = helpers.JsonResponse(
+			constants.FAIL,
+			err.Error(),
+			w,
+		)
+		return
+	}
+
+	if verifiedToken.Role != "admin" {
+		err = helpers.JsonResponse(
+			constants.FAIL,
+			"only admin is allow to delete user data",
+			w,
+		)
+		return
+	}
+
 	//retrieve parameter from url
 	param, ok := r.URL.Query()["id"]
 	if !ok || len(param[0]) < 1 {
-		response.Status = constants.FAIL
-		response.Message = "Url Param 'key' is missing"
-		jsonResponse, err := json.Marshal(response)
-		if err != nil {
-			return
-		}
-		_, err = w.Write(jsonResponse)
-		if err != nil {
-			return
-		}
+		_ = helpers.JsonResponse(
+			constants.FAIL,
+			"Url Param 'key' is missing",
+			w,
+		)
 		return
 	}
 
-	//retrieve first string element from param(array)
-	stringID := param[0]
-
-	//convert string id to uint64 type
-	uintID, err := strconv.ParseUint(stringID, 10, 64)
+	// convert id to uint64 type
+	uintID, err := strconv.ParseUint(param[0], 10, 64)
 	if err != nil {
-		response.Status = constants.FAIL
-		response.Message = "Fail to convert string ID to int ID"
-		jsonResponse, err := json.Marshal(response)
-		if err != nil {
-			return
-		}
-		_, err = w.Write(jsonResponse)
-		if err != nil {
-			return
-		}
+		err = helpers.JsonResponse(
+			constants.FAIL,
+			err.Error(),
+			w,
+		)
 		return
 	}
 
-	err = u.ModelsFunc.DeleteUsers(uint(uintID))
+	err = u.ModelsFunc.Delete(uint(uintID))
 	if err != nil {
-		response.Status = constants.FAIL
-		response.Message = "User not found"
-		jsonResponse, err := json.Marshal(response)
-		if err != nil {
-			return
-		}
-		_, err = w.Write(jsonResponse)
-		if err != nil {
-			return
-		}
+		err = helpers.JsonResponse(
+			constants.FAIL,
+			err.Error(),
+			w,
+		)
 		return
 	}
-	response.Status = constants.SUCCESS
-	response.Message = "Deleted Successfully"
-	jsonResponse, err := json.Marshal(response)
-	if err != nil {
-		return
-	}
-	_, err = w.Write(jsonResponse)
-	if err != nil {
-		return
-	}
-	return
+
+	err = helpers.JsonResponse(
+		constants.SUCCESS,
+		"Delete successfully",
+		w,
+	)
 }
